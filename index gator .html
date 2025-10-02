@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ware County Middle — Gators Bus Dismissal Board (Synced)</title>
+<style>
+  :root{ --green:#006b3f; --gold:#fdb827; --bg:#05130a; --fg:#f8fafc; --cols:1; --fs:56px; }
+  *{ box-sizing:border-box }
+  body{ margin:0; font-family:Arial,Helvetica,sans-serif; background:var(--bg); color:var(--fg); text-align:center; padding:18px }
+  h1{ margin:0 0 12px; font-size:clamp(26px,5vw,44px); color:var(--gold) }
+  .toolbar{ display:flex; flex-wrap:wrap; gap:10px; justify-content:center; margin:12px 0 }
+  .toolbar input,.toolbar button{ font-size:1.1rem; padding:10px 14px; border-radius:10px; border:none }
+  .toolbar input{ min-width:160px; background:#111; color:#fff; border:2px solid #333 }
+  .btn{ font-weight:700; cursor:pointer }
+  .add{ background:#1473e6; color:#fff }
+  .replay{ background:#374151; color:#fff }
+  .sound{ background:#0f766e; color:#fff }
+  .clear{ background:#b91c1c; color:#fff }
+  .viewerBtn{ background:var(--gold); color:#0b301e }
+  .disabled .btn, .disabled input{ opacity:.4; pointer-events:none }
+  #busList{ display:grid; gap:14px; margin-top:18px; grid-template-columns:repeat(var(--cols,1),1fr) }
+  .bus-row{ background:#0d1913; border:2px solid rgba(253,184,39,.45); border-radius:14px; padding:10px 14px;
+            font-size:var(--fs,clamp(38px,8vw,84px)); font-weight:900 }
+  .bus-row.new{ animation:flash 1.2s ease-in-out 3 }
+  @keyframes flash{ 0%,100%{ color:var(--gold) } 50%{ color:#ff4242 } }
+  .gate{ position:fixed; inset:0; display:none; place-items:center; background:rgba(0,0,0,.7); z-index:999 }
+  .gate.show{ display:grid }
+  .card{ background:#0b301e; border:2px solid var(--gold); color:#fff; padding:22px 18px; border-radius:14px; width:min(520px,94vw) }
+  .room-pill{ display:inline-block; margin:8px 0 0; padding:4px 10px; border-radius:999px; border:1px solid rgba(253,184,39,.5); color:#fff }
+</style>
+</head>
+<body>
+<h1>🐊 Gators Bus Dismissal Board</h1>
+<div class="room-pill" id="roomPill"></div>
+
+<div class="toolbar" id="toolbar">
+  <input id="busInput" placeholder="Enter bus number" autocomplete="off" />
+  <button id="addBtn" class="btn add">Add</button>
+  <button id="replayBtn" class="btn replay">Replay</button>
+  <button id="soundBtn" class="btn sound">Sound: On</button>
+  <button id="viewerBtn" class="btn viewerBtn">Open Viewer</button>
+  <button id="clearBtn" class="btn clear">Clear</button>
+</div>
+
+<div id="busList" aria-live="polite" aria-atomic="true"></div>
+
+<div id="soundGate" class="gate" role="dialog" aria-modal="true">
+  <div class="card">
+    <h2>Enable Sound</h2>
+    <p>Tap once to enable the loud buzzer on this device. This will be remembered.</p>
+    <button id="enableSoundBtn" class="btn sound">Enable Sound</button>
+  </div>
+</div>
+
+<audio id="beep" preload="auto" playsinline src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YUQAAAAAAP//AAD///8AAP//AP///wAA//8A////AAD//wD///8AAP//AP///wAA//8A"></audio>
+
+<script type="module">
+  // Firebase config (your project)
+  const firebaseConfig = {
+    apiKey: "AIzaSyDKPH86_MdPxJ9z9mPxnlObrLHP6GcxO1I",
+    authDomain: "gators-bus-dismissal.firebaseapp.com",
+    databaseURL: "https://gators-bus-dismissal-default-rtdb.firebaseio.com",
+    projectId: "gators-bus-dismissal",
+    storageBucket: "gators-bus-dismissal.firebasestorage.app",
+    messagingSenderId: "888243518289",
+    appId: "1:888243518289:web:b898b40a3cdde5c10e3170",
+    measurementId: "G-L9VE6WKLWT"
+  };
+
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import { getDatabase, ref, onValue, set } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+  const app = initializeApp(firebaseConfig);
+  const db = getDatabase(app);
+
+  const url = new URL(location.href);
+  const MODE = (url.searchParams.get('mode') || 'admin').toLowerCase();
+  const ROOM_CODE = (url.searchParams.get('room') || 'ware').toLowerCase();
+  document.getElementById('roomPill').textContent = `Room: ${ROOM_CODE.toUpperCase()} • Mode: ${MODE}`;
+
+  const roomRef = ref(db, `rooms/${ROOM_CODE}/buses`);
+
+  const busInput=document.getElementById('busInput');
+  const busListEl=document.getElementById('busList');
+  const addBtn=document.getElementById('addBtn');
+  const replayBtn=document.getElementById('replayBtn');
+  const soundBtn=document.getElementById('soundBtn');
+  const clearBtn=document.getElementById('clearBtn');
+  const viewerBtn=document.getElementById('viewerBtn');
+  const toolbar=document.getElementById('toolbar');
+  const soundGate=document.getElementById('soundGate');
+  const enableSoundBtn=document.getElementById('enableSoundBtn');
+  const beep=document.getElementById('beep');
+
+  let buses=[]; let soundEnabled=true; let audioCtx=null;
+
+  if(MODE==='viewer'){
+    toolbar.classList.add('disabled');
+    [busInput,addBtn,replayBtn,soundBtn,clearBtn,viewerBtn].forEach(el=>el&&(el.disabled=true));
+  }
+
+  function render(highlight=-1){
+    busListEl.innerHTML='';
+    buses.forEach((n,idx)=>{
+      const div=document.createElement('div');
+      div.className='bus-row' + (idx===highlight?' new':'');
+      div.textContent=n;
+      busListEl.appendChild(div);
+    });
+    layout();
+  }
+
+  function layout(){
+    const n=buses.length||1;
+    const top=toolbar.getBoundingClientRect().bottom;
+    const availH=Math.max(160, window.innerHeight-top-18);
+    const w=busListEl.clientWidth||window.innerWidth;
+    const minTile=180;
+    const maxCols=Math.max(1,Math.floor(w/minTile));
+    let best={cols:1,fs:36};
+    for(let cols=1; cols<=maxCols; cols++){
+      const rows=Math.ceil(n/cols);
+      const fs=Math.max(24,Math.floor((availH/rows)*0.56));
+      if(fs>best.fs) best={cols,fs};
+    }
+    document.documentElement.style.setProperty('--cols',best.cols);
+    document.documentElement.style.setProperty('--fs',best.fs+'px');
+  }
+
+  async function ensureAudio(){
+    try{
+      if(!audioCtx) audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+      if(audioCtx.state==='suspended') await audioCtx.resume();
+      const b=audioCtx.createBuffer(1,1,22050);
+      const s=audioCtx.createBufferSource(); s.buffer=b; s.connect(audioCtx.destination); s.start(0);
+      return true;
+    }catch{ return false; }
+  }
+
+  async function playSound(){
+    if(!soundEnabled) return;
+    try{
+      const ok=await ensureAudio(); if(!ok) throw new Error();
+      const now=audioCtx.currentTime; const seq=[880,660,990,660,880]; let t=0;
+      for(const f of seq){
+        const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+        o.type='square'; o.frequency.value=f;
+        g.gain.setValueAtTime(0.4,now+t);
+        g.gain.exponentialRampToValueAtTime(0.001,now+t+0.38);
+        o.connect(g).connect(audioCtx.destination);
+        o.start(now+t); o.stop(now+t+0.38); t+=0.42;
+      }
+    }catch{ try{ beep.currentTime=0; await beep.play(); }catch{} }
+  }
+
+  function toggleSound(){ soundEnabled=!soundEnabled; soundBtn.textContent='Sound: '+(soundEnabled?'On':'Off'); }
+  function openViewer(){ const u=new URL(location.href); u.searchParams.set('mode','viewer'); window.open(u,'_blank','noopener'); }
+
+  function addBus(){
+    if(MODE==='viewer') return;
+    const num=busInput.value.trim(); if(!num) return;
+    buses.unshift(num); busInput.value='';
+    render(0); playSound();
+    set(roomRef,buses);
+  }
+  function clearAll(){ if(MODE!=='viewer' && confirm('Clear all?')){ buses=[]; render(); set(roomRef,buses); } }
+
+  addBtn.onclick=addBus; clearBtn.onclick=clearAll; replayBtn.onclick=playSound; soundBtn.onclick=toggleSound; viewerBtn.onclick=openViewer;
+  busInput.onkeydown=e=>{ if(e.key==='Enter') addBus(); };
+  enableSoundBtn.onclick=()=>{ ensureAudio().then(ok=>{ if(ok){ soundGate.classList.remove('show'); playSound(); } }); };
+
+  onValue(roomRef,snap=>{
+    const val=snap.val(); if(Array.isArray(val)){ const was=buses[0]; buses=val; render(buses[0]!==was?0:-1); if(MODE==='viewer' && buses[0]!==was) playSound(); }
+  });
+
+  try{ if(localStorage.getItem('wcms_sound_unlocked_sync_v1')!=='1') soundGate.classList.add('show'); }catch{}
+  window.addEventListener('resize',layout); window.addEventListener('orientationchange',layout);
+</script>
+</body>
+</html>
