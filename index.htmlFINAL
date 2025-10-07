@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Gators Bus Dismissal Board — Admin & Viewer (Sync + Fit)</title>
+<style>
+  :root{
+    --gold:#fdb827; --green:#006b3f; --bg:#05130a; --fg:#f8fafc;
+    --cols:1; --fs:56px; --gap:12px; --padY:10px; --padX:14px;
+  }
+  *{ box-sizing:border-box }
+  html,body{ height:100% }
+  body{
+    margin:0; font-family:Arial,Helvetica,sans-serif; background:var(--bg);
+    color:var(--fg); text-align:center; padding:12px; overflow:hidden;
+  }
+  h1{ margin:0 0 8px; font-size:clamp(22px,5vw,40px); color:var(--gold) }
+
+  .toolbar{ display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin:8px 0 }
+  .toolbar input,.toolbar button{ font-size:1.05rem; padding:8px 12px; border-radius:10px; border:none }
+  .toolbar input{ min-width:160px; background:#111; color:#fff; border:2px solid #333 }
+  .btn{ font-weight:700; cursor:pointer }
+  .add{ background:#1473e6; color:#fff }
+  .replay{ background:#374151; color:#fff }
+  .sound{ background:#0f766e; color:#fff }
+  .clear{ background:#b91c1c; color:#fff }
+  .select{ background:#6b21a8; color:#fff }
+  .clearSel{ background:#dc2626; color:#fff }
+  .viewerBtn{ background:var(--gold); color:#0b301e }
+  .full{ background:#1f2937; color:#fff }
+  .disabled .btn, .disabled input{ opacity:.35; pointer-events:none }
+  .viewer-enabled .full{ opacity:1 !important; pointer-events:auto !important }
+
+  .room-pill{ display:inline-block; margin:6px 0 0; padding:3px 9px; border-radius:999px; border:1px solid rgba(253,184,39,.5); color:#fff }
+  .hint{ font-size:.9rem; opacity:.85; margin-top:4px }
+
+  .wrap{ position:relative; height:calc(100vh - var(--topOffset, 220px)); max-width:100vw; margin:0 auto }
+  #busList{
+    position:absolute; inset:0; display:grid; gap:var(--gap);
+    grid-template-columns:repeat(var(--cols,1),1fr); align-items:stretch; justify-items:stretch
+  }
+  .bus-row{
+    display:grid; grid-template-columns:auto 1fr auto; align-items:center; gap:10px;
+    background:#0d1913; border:2px solid rgba(253,184,39,.45); border-radius:12px;
+    padding:var(--padY) var(--padX); font-size:var(--fs,clamp(26px,8vw,84px)); font-weight:900
+  }
+  .bus-row.new{ animation:flash 1.2s ease-in-out 3 }
+  .bus-num{ justify-self:center }
+  .selbox{ transform: scale(1.3); accent-color: var(--gold) }
+  .removeX{ background:transparent; color:#bbb; border:2px solid #333; padding:4px 10px; border-radius:10px; font-weight:800 }
+  .removeX:hover{ color:#fff; border-color:#555 }
+  @keyframes flash{ 0%,100%{ color:var(--gold) } 50%{ color:#ff4242 } }
+
+  /* Sound gate */
+  .gate{ position:fixed; inset:0; display:none; place-items:center; background:rgba(0,0,0,.7); z-index:999 }
+  .gate.show{ display:grid }
+  .card{ background:#0b301e; border:2px solid var(--gold); color:#fff; padding:20px 16px; border-radius:14px; width:min(520px,94vw) }
+
+  /* Viewer gives max space to grid */
+  body.viewer .toolbar, body.viewer .hint { display:none !important; }
+  body.viewer h1 { margin-bottom:6px; font-size:clamp(22px,4.5vw,38px); }
+</style>
+</head>
+<body>
+<h1>🐊 Gators Bus Dismissal Board</h1>
+<div class="room-pill" id="roomPill"></div>
+
+<div class="toolbar" id="toolbar">
+  <input id="busInput" placeholder="Enter bus number" autocomplete="off" />
+  <button id="addBtn" class="btn add">Add</button>
+  <button id="replayBtn" class="btn replay">Replay</button>
+  <button id="soundBtn" class="btn sound">Sound: On</button>
+  <button id="viewerBtn" class="btn viewerBtn">Open Viewer</button>
+  <button id="selectModeBtn" class="btn select">Select</button>
+  <button id="selectAllBtn" class="btn select" title="Select/Deselect all">All</button>
+  <button id="clearSelectedBtn" class="btn clearSel" disabled>Clear Selected (0)</button>
+  <button id="clearBtn" class="btn clear">Clear All</button>
+  <button id="fullBtn" class="btn full">Fullscreen</button>
+</div>
+<div class="hint">Viewer mode: only <b>Fullscreen</b> works. The board auto-fits to show <b>all numbers</b> without scrolling.</div>
+
+<div class="wrap"><div id="busList" aria-live="polite" aria-atomic="true"></div></div>
+
+<!-- One-time sound permission -->
+<div id="soundGate" class="gate" role="dialog" aria-modal="true">
+  <div class="card">
+    <h2>Enable Sound</h2>
+    <p>Tap once to enable the loud buzzer on this device. This will be remembered.</p>
+    <button id="enableSoundBtn" class="btn sound">Enable Sound</button>
+  </div>
+</div>
+
+<!-- tiny inline audio as fallback -->
+<audio id="beep" preload="auto" playsinline src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YUQAAAAAAP//AAD///8AAP//AP///wAA//8A////AAD//wD///8AAP//AP///wAA//8A"></audio>
+
+<script type="module">
+  /* Firebase (sync) */
+  const firebaseConfig = {
+    apiKey: "AIzaSyDKPH86_MdPxJ9z9mPxnlObrLHP6GcxO1I",
+    authDomain: "gators-bus-dismissal.firebaseapp.com",
+    databaseURL: "https://gators-bus-dismissal-default-rtdb.firebaseio.com",
+    projectId: "gators-bus-dismissal",
+    storageBucket: "gators-bus-dismissal.firebasestorage.app",
+    messagingSenderId: "888243518289",
+    appId: "1:888243518289:web:b898b40a3cdde5c10e3170",
+    measurementId: "G-L9VE6WKLWT"
+  };
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import { getDatabase, ref, onValue, set } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+  const app = initializeApp(firebaseConfig);
+  const db  = getDatabase(app);
+
+  /* Mode/Room */
+  const url = new URL(location.href);
+  const MODE = (url.searchParams.get('mode') || 'admin').toLowerCase();
+  const ROOM = (url.searchParams.get('room') || 'ware').toLowerCase();
+  if (MODE === 'viewer') document.body.classList.add('viewer');
+  const roomRef = ref(db, `rooms/${ROOM}/buses`);
+  document.getElementById('roomPill').textContent = `Room: ${ROOM.toUpperCase()} • Mode: ${MODE}`;
+
+  /* DOM */
+  const busInput  = document.getElementById('busInput');
+  const busListEl = document.getElementById('busList');
+  const addBtn    = document.getElementById('addBtn');
+  const replayBtn = document.getElementById('replayBtn');
+  const soundBtn  = document.getElementById('soundBtn');
+  const clearBtn  = document.getElementById('clearBtn');
+  const viewerBtn = document.getElementById('viewerBtn');
+  const selectModeBtn = document.getElementById('selectModeBtn');
+  const selectAllBtn  = document.getElementById('selectAllBtn');
+  const clearSelectedBtn = document.getElementById('clearSelectedBtn');
+  const fullBtn   = document.getElementById('fullBtn');
+  const toolbar   = document.getElementById('toolbar');
+  const soundGate = document.getElementById('soundGate');
+  const enableSoundBtn = document.getElementById('enableSoundBtn');
+  const beep = document.getElementById('beep');
+
+  /* State */
+  let buses = [];
+  let soundEnabled = true;
+  let audioCtx = null;
+  let selectionMode = false;
+  let selected = new Set();
+  let layoutPending = false;
+
+  /* Viewer restriction */
+  if (MODE === 'viewer') {
+    toolbar.classList.add('disabled','viewer-enabled');
+    [busInput,addBtn,replayBtn,soundBtn,clearBtn,viewerBtn,selectModeBtn,selectAllBtn,clearSelectedBtn]
+      .forEach(el => el && (el.disabled = true));
+    fullBtn.disabled = false; // allow fullscreen
+  }
+
+  function scheduleLayout(){
+    if (layoutPending) return;
+    layoutPending = true;
+    requestAnimationFrame(()=>{
+      layoutPending = false;
+      layout();
+    });
+  }
+
+  /* Render */
+  function render(highlight = -1){
+    busListEl.innerHTML = '';
+    buses.forEach((n, idx) => {
+      const row = document.createElement('div');
+      row.className = 'bus-row' + (idx === highlight ? ' new' : '');
+
+      if (MODE === 'admin' && selectionMode) {
+        const cb = document.createElement('input');
+        cb.type = 'checkbox'; cb.className = 'selbox';
+        cb.checked = selected.has(idx);
+        cb.addEventListener('change', () => {
+          if (cb.checked) selected.add(idx); else selected.delete(idx);
+          updateSelectedUI();
+        });
+        row.appendChild(cb);
+      } else {
+        const spacer = document.createElement('div');
+        spacer.style.width = '1.3em'; spacer.style.height = '1.3em';
+        row.appendChild(spacer);
+      }
+
+      const num = document.createElement('div');
+      num.className = 'bus-num';
+      num.textContent = n;
+      row.appendChild(num);
+
+      const remove = document.createElement('button');
+      remove.className = 'removeX';
+      remove.textContent = '×';
+      remove.title = 'Remove this bus';
+      if (MODE !== 'admin') remove.style.display = 'none';
+      remove.addEventListener('click', () => removeBusAt(idx));
+      row.appendChild(remove);
+
+      busListEl.appendChild(row);
+    });
+
+    scheduleLayout();
+    updateSelectedUI();
+  }
+
+  function updateSelectedUI(){
+    const count = selected.size;
+    clearSelectedBtn.textContent = `Clear Selected (${count})`;
+    clearSelectedBtn.disabled = count === 0 || MODE !== 'admin';
+  }
+
+  /* Fit-all layout (no scroll) */
+  function layout(){
+    const anchors = [
+      document.querySelector('h1'),
+      document.getElementById('roomPill'),
+      (document.body.classList.contains('viewer') ? null : document.getElementById('toolbar')),
+      (document.body.classList.contains('viewer') ? null : document.querySelector('.hint'))
+    ].filter(el => el && el.offsetParent !== null);
+
+    let top = 0;
+    for (const el of anchors){
+      const b = el.getBoundingClientRect();
+      top = Math.max(top, b.bottom);
+    }
+    const vh = window.innerHeight - top - 8;
+    document.documentElement.style.setProperty('--topOffset', top + 'px');
+
+    const n = Math.max(1, buses.length);
+    const w = (document.querySelector('.wrap')||document.body).clientWidth || window.innerWidth;
+    const maxCols = Math.min(14, Math.max(1, Math.floor(w / 160)));
+    let best = { cols:1, fs:28, gap:12, padY:10, padX:12 };
+
+    for (let cols = 1; cols <= maxCols; cols++){
+      const rows = Math.ceil(n / cols);
+      for (const gap of [12,10,8,6,4]){
+        for (const pad of [10,8,6,4]){
+          const totalGapH = Math.max(0, (rows - 1) * gap);
+          const rowH = Math.floor((vh - totalGapH) / rows);
+          const fs = Math.max(18, Math.floor(rowH * 0.56));
+          const better = (fs > best.fs) || (fs === best.fs && cols < best.cols);
+          if (rowH > 28 && better) best = { cols, fs, gap, padY:pad, padX:pad+2 };
+        }
+      }
+    }
+    document.documentElement.style.setProperty('--cols', best.cols);
+    document.documentElement.style.setProperty('--fs', best.fs + 'px');
+    document.documentElement.style.setProperty('--gap', best.gap + 'px');
+    document.documentElement.style.setProperty('--padY', best.padY + 'px');
+    document.documentElement.style.setProperty('--padX', best.padX + 'px');
+  }
+
+  /* Sound */
+  async function ensureAudio(){
+    try{
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+      const b = audioCtx.createBuffer(1,1,22050);
+      const s = audioCtx.createBufferSource(); s.buffer = b; s.connect(audioCtx.destination); s.start(0);
+      try { localStorage.setItem('wcms_sound_unlocked_sync_v1','1'); } catch {}
+      return true;
+    }catch{ return false; }
+  }
+  async function playAdd(){
+    if (!soundEnabled) return;
+    try{
+      const ok = await ensureAudio(); if (!ok) throw new Error();
+      const now = audioCtx.currentTime; const seq = [880,660,990,660,880]; let t = 0;
+      for (const f of seq){
+        const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+        o.type = 'square'; o.frequency.value = f;
+        g.gain.setValueAtTime(0.44, now + t);
+        g.gain.exponentialRampToValueAtTime(0.001, now + t + 0.42);
+        o.connect(g).connect(audioCtx.destination);
+        o.start(now + t); o.stop(now + t + 0.42); t += 0.46;
+      }
+    }catch{ try{ beep.currentTime = 0; await beep.play(); }catch{} }
+  }
+  async function playRemove(){
+    if (!soundEnabled) return;
+    try{
+      const ok = await ensureAudio(); if (!ok) throw new Error();
+      const now = audioCtx.currentTime; const seq = [440,330,220]; let t = 0;
+      for (const f of seq){
+        const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+        o.type = 'sawtooth'; o.frequency.value = f;
+        g.gain.setValueAtTime(0.38, now + t);
+        g.gain.exponentialRampToValueAtTime(0.001, now + t + 0.36);
+        o.connect(g).connect(audioCtx.destination);
+        o.start(now + t); o.stop(now + t + 0.36); t += 0.4;
+      }
+    }catch{ /* silent fallback */ }
+  }
+  function toggleSound(){ soundEnabled = !soundEnabled; soundBtn.textContent = 'Sound: ' + (soundEnabled ? 'On' : 'Off'); }
+  function openViewer(){ const u = new URL(location.href); u.searchParams.set('mode','viewer'); window.open(u,'_blank','noopener'); }
+  function toggleFullscreen(){
+    const doc = document;
+    if (!doc.fullscreenElement && !doc.webkitFullscreenElement) {
+      const el = doc.documentElement; (el.requestFullscreen||el.webkitRequestFullscreen||el.msRequestFullscreen)?.call(el);
+    } else {
+      (doc.exitFullscreen||doc.webkitExitFullscreen||doc.msExitFullscreen)?.call(doc);
+    }
+  }
+
+  /* Admin actions */
+  function addBus(){
+    if (MODE === 'viewer') return;
+    const num = busInput.value.trim(); if (!num) return;
+    buses.unshift(num); busInput.value = '';
+    selected = new Set();
+    render(0); playAdd();
+    set(roomRef, buses);
+  }
+  function removeBusAt(idx){
+    if (MODE !== 'admin') return;
+    if (idx < 0 || idx >= buses.length) return;
+    buses.splice(idx,1);
+    // reindex selected set
+    const newSel = new Set();
+    [...selected].forEach(i => { if (i < idx) newSel.add(i); else if (i > idx) newSel.add(i-1); });
+    selected = newSel;
+    render();
+    set(roomRef, buses);
+    playRemove();
+  }
+  function clearAll(){
+    if (MODE !== 'viewer' && confirm('Clear all?')){
+      buses = []; selected = new Set(); render(); set(roomRef, buses);
+    }
+  }
+  function toggleSelectMode(){
+    if (MODE !== 'admin') return;
+    selectionMode = !selectionMode;
+    if (!selectionMode) selected = new Set();
+    selectModeBtn.textContent = selectionMode ? 'Done' : 'Select';
+    render();
+  }
+  function selectAllToggle(){
+    if (MODE !== 'admin' || !selectionMode) return;
+    if (selected.size === buses.length) selected = new Set();
+    else selected = new Set(buses.map((_, i) => i));
+    updateSelectedUI();
+    document.querySelectorAll('.selbox').forEach((cb, idx) => { cb.checked = selected.has(idx); });
+  }
+  function clearSelected(){
+    if (MODE !== 'admin' || selected.size === 0) return;
+    const keep = [];
+    buses.forEach((n, idx) => { if (!selected.has(idx)) keep.push(n); });
+    buses = keep; selected = new Set(); render(); set(roomRef, buses); playRemove();
+  }
+
+  /* Events */
+  addBtn.onclick = addBus;
+  clearBtn.onclick = clearAll;
+  replayBtn.onclick = playAdd;
+  soundBtn.onclick = toggleSound;
+  viewerBtn.onclick = openViewer;
+  fullBtn.onclick = toggleFullscreen;
+  selectModeBtn.onclick = toggleSelectMode;
+  selectAllBtn.onclick = selectAllToggle;
+  clearSelectedBtn.onclick = clearSelected;
+  busInput.onkeydown = e => { if (e.key === 'Enter') addBus(); };
+  enableSoundBtn.onclick = () => { ensureAudio().then(ok => { if (ok){ soundGate.classList.remove('show'); playAdd(); } }); };
+
+  /* Sync from Firebase */
+  onValue(roomRef, snap => {
+    const val = snap.val();
+    if (Array.isArray(val)) {
+      const wasTop = buses[0];
+      const prevLen = buses.length;
+      buses = val;
+      render(buses[0] !== wasTop ? 0 : -1);
+      if (MODE === 'viewer') {
+        if (buses.length > prevLen || buses[0] !== wasTop) playAdd();
+      }
+    }
+  });
+
+  /* Layout triggers (prevents “only after zoom” issue) */
+  window.addEventListener('load', scheduleLayout);
+  document.fonts && document.fonts.ready.then(scheduleLayout).catch(()=>{});
+  try { new ResizeObserver(() => scheduleLayout()).observe(document.body); } catch {}
+  try { new ResizeObserver(() => scheduleLayout()).observe(busListEl); } catch {}
+  if (window.visualViewport) visualViewport.addEventListener('resize', scheduleLayout);
+  window.addEventListener('resize', scheduleLayout);
+  window.addEventListener('orientationchange', scheduleLayout);
+  window.addEventListener('pageshow', scheduleLayout);
+</script>
+</body>
+</html>
