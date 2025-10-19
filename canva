@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bus Dismissal Board</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body {
+            box-sizing: border-box;
+            font-family: 'Poppins', sans-serif;
+        }
+        
+        .school-green { background-color: #ccd5ae; }
+        .school-green-light { background-color: #e9edc9; }
+        .school-gold { background-color: #fefae0; }
+        .school-gold-dark { background-color: #faedcd; }
+        .warm-brown { background-color: #d4a373; }
+        
+        .bus-enter {
+            animation: busEnter 0.5s ease-out;
+        }
+        
+        @keyframes busEnter {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .notification-sound {
+            animation: pulse 0.3s ease-in-out 3;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+    </style>
+</head>
+<body class="min-h-full bg-gray-100">
+    <div id="app" class="min-h-full">
+        <!-- Navigation -->
+        <nav class="school-green text-gray-800 p-4 shadow-lg">
+            <div class="max-w-6xl mx-auto flex justify-between items-center">
+                <h1 class="text-2xl font-bold">🐊 Bus Dismissal Board</h1>
+                <div class="flex gap-4">
+                    <input 
+                        type="text" 
+                        id="busNumberInput" 
+                        placeholder="Enter bus number..." 
+                        class="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                    >
+                    <button 
+                        id="addBusBtn" 
+                        class="school-green text-white px-6 py-2 rounded-lg hover:school-green-light transition-colors font-semibold"
+                    >
+                        Add Bus
+                    </button>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Main Display -->
+        <div class="min-h-full">
+            <div class="school-green text-gray-800 text-center py-8">
+                <h1 class="text-6xl font-bold mb-4">🐊 BUSES NOW LOADING</h1>
+                <p class="text-2xl">Please listen for your bus number</p>
+            </div>
+            
+            <div id="busGrid" class="p-8 grid gap-6 auto-rows-fr">
+                <!-- Bus grid will be populated here -->
+            </div>
+            
+            <div id="noBusesMessage" class="text-center py-20 text-gray-500 text-2xl">
+                No buses currently loading
+            </div>
+        </div>
+
+        <!-- Passcode Modal -->
+        <div id="passcodeModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+            <div class="bg-white rounded-lg p-8 max-w-md w-full mx-4">
+                <h2 class="text-2xl font-bold text-gray-800 mb-4 text-center">Enter Admin Passcode</h2>
+                <input 
+                    type="password" 
+                    id="passcodeInput" 
+                    placeholder="Enter passcode..." 
+                    class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-center text-lg"
+                >
+                <div class="flex gap-3 mt-6">
+                    <button 
+                        id="cancelPasscodeBtn" 
+                        class="flex-1 bg-gray-500 text-white px-4 py-2 rounded-lg hover:bg-gray-600 transition-colors font-semibold"
+                    >
+                        Cancel
+                    </button>
+                    <button 
+                        id="submitPasscodeBtn" 
+                        class="flex-1 bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 transition-colors font-semibold"
+                    >
+                        Submit
+                    </button>
+                </div>
+                <p class="text-sm text-gray-600 mt-4 text-center">Access expires after 1 hour</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class BusDismissalBoard {
+            constructor() {
+                this.buses = this.loadBuses();
+                this.passcode = '1234'; // Default passcode
+                this.adminAccess = false;
+                this.accessExpiry = null;
+                this.init();
+            }
+            
+            loadBuses() {
+                try {
+                    const saved = localStorage.getItem('busDismissalBuses');
+                    return saved ? JSON.parse(saved) : [];
+                } catch (e) {
+                    return [];
+                }
+            }
+            
+            saveBuses() {
+                try {
+                    localStorage.setItem('busDismissalBuses', JSON.stringify(this.buses));
+                } catch (e) {
+                    console.error('Could not save buses to localStorage');
+                }
+            }
+            
+            checkAdminAccess() {
+                if (this.accessExpiry && Date.now() > this.accessExpiry) {
+                    this.adminAccess = false;
+                    this.accessExpiry = null;
+                }
+                return this.adminAccess;
+            }
+            
+            init() {
+                this.bindEvents();
+                this.updateDisplay();
+                this.setupSyncListener();
+            }
+            
+            setupSyncListener() {
+                // Listen for changes from other tabs/windows
+                window.addEventListener('storage', (e) => {
+                    if (e.key === 'busDismissalBuses') {
+                        this.buses = this.loadBuses();
+                        this.updateDisplay();
+                    }
+                });
+                
+                // Also check for updates every 2 seconds as backup
+                setInterval(() => {
+                    const currentBuses = this.loadBuses();
+                    if (JSON.stringify(currentBuses) !== JSON.stringify(this.buses)) {
+                        this.buses = currentBuses;
+                        this.updateDisplay();
+                    }
+                }, 2000);
+            }
+            
+            bindEvents() {
+                document.getElementById('addBusBtn').addEventListener('click', () => this.handleAddBus());
+                document.getElementById('busNumberInput').addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') this.handleAddBus();
+                });
+                
+                // Passcode modal events
+                document.getElementById('submitPasscodeBtn').addEventListener('click', () => this.submitPasscode());
+                document.getElementById('cancelPasscodeBtn').addEventListener('click', () => this.hidePasscodeModal());
+                document.getElementById('passcodeInput').addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') this.submitPasscode();
+                });
+                
+                // Update display when window is resized
+                window.addEventListener('resize', () => {
+                    this.updateBusGrid();
+                });
+            }
+            
+            handleAddBus() {
+                if (!this.checkAdminAccess()) {
+                    this.showPasscodeModal();
+                    return;
+                }
+                this.addBus();
+            }
+            
+            showPasscodeModal() {
+                const modal = document.getElementById('passcodeModal');
+                const input = document.getElementById('passcodeInput');
+                modal.classList.remove('hidden');
+                input.focus();
+                input.value = '';
+            }
+            
+            hidePasscodeModal() {
+                const modal = document.getElementById('passcodeModal');
+                modal.classList.add('hidden');
+            }
+            
+            submitPasscode() {
+                const input = document.getElementById('passcodeInput');
+                const enteredCode = input.value.trim();
+                
+                if (enteredCode === this.passcode) {
+                    this.adminAccess = true;
+                    this.accessExpiry = Date.now() + (60 * 60 * 1000); // 1 hour from now
+                    this.hidePasscodeModal();
+                    this.addBus();
+                    this.showNotification('Admin access granted for 1 hour!', 'success');
+                } else {
+                    this.showNotification('Incorrect passcode!', 'error');
+                    input.value = '';
+                    input.focus();
+                }
+            }
+            
+            addBus() {
+                const input = document.getElementById('busNumberInput');
+                const busNumber = input.value.trim();
+                
+                if (!busNumber) return;
+                
+                if (this.buses.find(bus => bus.number === busNumber)) {
+                    this.showNotification('Bus number already exists!', 'error');
+                    return;
+                }
+                
+                const newBus = {
+                    id: Date.now(),
+                    number: busNumber,
+                    timestamp: new Date()
+                };
+                
+                this.buses.unshift(newBus);
+                input.value = '';
+                this.saveBuses();
+                this.playNotificationSound(busNumber);
+                this.updateDisplay();
+                this.showNotification(`Bus ${busNumber} added!`, 'success');
+            }
+            
+            removeBus(busId) {
+                const busIndex = this.buses.findIndex(bus => bus.id === busId);
+                if (busIndex > -1) {
+                    const busNumber = this.buses[busIndex].number;
+                    this.buses.splice(busIndex, 1);
+                    this.saveBuses();
+                    this.playSwooshSound();
+                    this.updateDisplay();
+                    this.showNotification(`Bus ${busNumber} removed!`, 'success');
+                }
+            }
+            
+            playNotificationSound(busNumber = null) {
+                // Create a longer, more attention-getting alarm sound using Web Audio API
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                
+                // Create a longer sequence of alternating high and low beeps
+                for (let i = 0; i < 8; i++) {
+                    setTimeout(() => {
+                        const oscillator = audioContext.createOscillator();
+                        const gainNode = audioContext.createGain();
+                        
+                        oscillator.connect(gainNode);
+                        gainNode.connect(audioContext.destination);
+                        
+                        // Alternate between high and low frequencies for more annoying effect
+                        const frequency = i % 2 === 0 ? 1000 : 600;
+                        oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime);
+                        gainNode.gain.setValueAtTime(0.4, audioContext.currentTime);
+                        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
+                        
+                        oscillator.start(audioContext.currentTime);
+                        oscillator.stop(audioContext.currentTime + 0.5);
+                    }, i * 300);
+                }
+                
+                // After the alarm sound, announce the bus number
+                if (busNumber) {
+                    setTimeout(() => {
+                        this.speakBusNumber(busNumber);
+                    }, 2500); // Wait for alarm to finish
+                }
+            }
+            
+            speakBusNumber(busNumber) {
+                if ('speechSynthesis' in window) {
+                    const utterance = new SpeechSynthesisUtterance(`Bus number ${busNumber} is now loading`);
+                    utterance.rate = 0.8; // Slightly slower for clarity
+                    utterance.volume = 0.8;
+                    utterance.pitch = 1.0;
+                    
+                    // Try to use a clear voice if available
+                    const voices = speechSynthesis.getVoices();
+                    const preferredVoice = voices.find(voice => 
+                        voice.lang.startsWith('en') && 
+                        (voice.name.includes('Google') || voice.name.includes('Microsoft') || voice.name.includes('Alex'))
+                    );
+                    if (preferredVoice) {
+                        utterance.voice = preferredVoice;
+                    }
+                    
+                    speechSynthesis.speak(utterance);
+                }
+            }
+            
+            playSwooshSound() {
+                // Create a swoosh sound for bus removal
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                
+                const oscillator = audioContext.createOscillator();
+                const gainNode = audioContext.createGain();
+                const filterNode = audioContext.createBiquadFilter();
+                
+                oscillator.connect(filterNode);
+                filterNode.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+                
+                // Create a swoosh by sweeping frequency downward with noise-like characteristics
+                oscillator.type = 'sawtooth';
+                oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
+                oscillator.frequency.exponentialRampToValueAtTime(100, audioContext.currentTime + 0.8);
+                
+                // Add filter sweep for more swoosh effect
+                filterNode.type = 'lowpass';
+                filterNode.frequency.setValueAtTime(2000, audioContext.currentTime);
+                filterNode.frequency.exponentialRampToValueAtTime(200, audioContext.currentTime + 0.8);
+                
+                // Volume envelope for swoosh
+                gainNode.gain.setValueAtTime(0, audioContext.currentTime);
+                gainNode.gain.linearRampToValueAtTime(0.3, audioContext.currentTime + 0.1);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.8);
+                
+                oscillator.start(audioContext.currentTime);
+                oscillator.stop(audioContext.currentTime + 0.8);
+            }
+            
+            updateDisplay() {
+                this.updateBusGrid();
+                
+                // Trigger storage event for other tabs/windows
+                window.dispatchEvent(new StorageEvent('storage', {
+                    key: 'busDismissalBuses',
+                    newValue: JSON.stringify(this.buses),
+                    storageArea: localStorage
+                }));
+            }
+            
+            updateBusGrid() {
+                const busGrid = document.getElementById('busGrid');
+                const noBusesMessage = document.getElementById('noBusesMessage');
+                
+                if (this.buses.length === 0) {
+                    busGrid.innerHTML = '';
+                    noBusesMessage.classList.remove('hidden');
+                    return;
+                }
+                
+                noBusesMessage.classList.add('hidden');
+                
+                // Calculate optimal grid layout based on screen space
+                const busCount = this.buses.length;
+                let columns, rows;
+                
+                if (busCount === 1) {
+                    columns = 1; rows = 1;
+                } else if (busCount <= 4) {
+                    columns = 2; rows = Math.ceil(busCount / 2);
+                } else if (busCount <= 9) {
+                    columns = 3; rows = Math.ceil(busCount / 3);
+                } else if (busCount <= 16) {
+                    columns = 4; rows = Math.ceil(busCount / 4);
+                } else if (busCount <= 25) {
+                    columns = 5; rows = Math.ceil(busCount / 5);
+                } else {
+                    columns = 6; rows = Math.ceil(busCount / 6);
+                }
+                
+                // Calculate responsive sizing based on available space
+                const availableHeight = window.innerHeight - 200; // Account for header
+                const availableWidth = window.innerWidth - 64; // Account for padding
+                
+                const cardHeight = Math.max(120, Math.min(300, availableHeight / rows - 24));
+                const cardWidth = Math.max(150, Math.min(250, availableWidth / columns - 24));
+                
+                // Calculate font sizes based on card size
+                const busIconSize = Math.max(2, Math.min(4, cardHeight / 60));
+                const busTextSize = Math.max(1.5, Math.min(2.5, cardHeight / 80));
+                const busNumberSize = Math.max(2.5, Math.min(4, cardHeight / 50));
+                const loadingTextSize = Math.max(0.875, Math.min(1.125, cardHeight / 120));
+                
+                busGrid.className = `p-8 grid gap-6`;
+                busGrid.style.gridTemplateColumns = `repeat(${columns}, 1fr)`;
+                busGrid.style.height = `${availableHeight}px`;
+                
+                busGrid.innerHTML = this.buses.map(bus => `
+                    <div class="school-gold rounded-xl text-center shadow-2xl bus-enter transform hover:scale-105 transition-transform flex flex-col justify-center items-center border-2 border-opacity-20 relative" 
+                         style="min-height: ${cardHeight}px; padding: ${Math.max(8, cardHeight * 0.1)}px; border-color: #d4a373;">
+                        ${this.checkAdminAccess() ? `
+                            <button 
+                                onclick="busBoard.removeBus(${bus.id})"
+                                class="absolute top-2 right-2 bg-red-500 text-white w-8 h-8 rounded-full hover:bg-red-600 transition-colors font-bold text-sm"
+                                title="Remove bus"
+                            >
+                                ×
+                            </button>
+                        ` : ''}
+                        <div style="font-size: ${busIconSize}rem; margin-bottom: ${Math.max(4, cardHeight * 0.05)}px;">🐊</div>
+                        <div class="font-bold" style="font-size: ${busTextSize}rem; margin-bottom: ${Math.max(2, cardHeight * 0.03)}px; color: #6b7280;">BUS</div>
+                        <div class="font-black" style="font-size: ${busNumberSize}rem; line-height: 1; color: #374151;">${bus.number}</div>
+                        <div class="font-semibold" style="font-size: ${loadingTextSize}rem; margin-top: ${Math.max(4, cardHeight * 0.05)}px; color: #6b7280;">NOW LOADING</div>
+                    </div>
+                `).join('');
+            }
+            
+            showNotification(message, type) {
+                const notification = document.createElement('div');
+                notification.className = `fixed top-4 right-4 px-6 py-3 rounded-lg text-white font-semibold z-50 notification-sound ${
+                    type === 'success' ? 'bg-green-500' : 'bg-red-500'
+                }`;
+                notification.textContent = message;
+                
+                document.body.appendChild(notification);
+                
+                setTimeout(() => {
+                    notification.remove();
+                }, 3000);
+            }
+        }
+        
+        // Initialize the bus dismissal board
+        const busBoard = new BusDismissalBoard();
+    </script>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'9912021a67652b5c',t:'MTc2MDg5NTA3Ny4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>
